@@ -174,9 +174,8 @@ class MiningService : Service() {
                 process = p
                 appendLog("Started feelcoin-miner, threads=$threads, pool pool.feelcoin.org:${if (tls) 4244 else 4242} ${if (tls) "TLS" else "plaintext"}")
                 val reader = p.inputStream.bufferedReader()
-                var line: String?
-                while (shouldRun && reader.readLine().also { line = it } != null) {
-                    val l = line ?: break
+                while (shouldRun) {
+                    val l = reader.readLine() ?: break
                     appendLog(l)
                     parseLine(l)
                     if (pausedReason != null) break
