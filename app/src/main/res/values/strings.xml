@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Feel Miner</string>
+    <string name="notif_channel_name">Mining</string>
+    <string name="notif_channel_desc">Shown while the Feelcoin miner is running</string>
+    <string name="notif_title">Feel Miner</string>
+    <string name="footer_info">Pool: pool.feelcoin.org:4244 TLS by default, 4242 plaintext alternative · 0% donate · GPL-3.0\nOfficial Feelcoin Miner v0.1.0, based on XMRig. This app does not take a cut.</string>
+    <string name="tagline">Mines Feelcoin on ARM64 devices. Experimental — generates heat and drains battery. No warranty, use at your own risk.</string>
+    <string name="wallet_hint">FEEL wallet</string>
+    <string name="wallet_tip">Tip: paste only the public Receive address. Never a seed, private key, or password.</string>
+</resources>

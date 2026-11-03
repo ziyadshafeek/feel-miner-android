@@ -1,0 +1,177 @@
+name: Publish release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+env:
+  NDK_VERSION: "28.2.13676358"
+
+jobs:
+  build-feelminer:
+    name: Build Feelcoin miner binary (NDK cross-compile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      binary-hash: ${{ steps.hash.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Use preinstalled Android SDK
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+
+      - name: Install NDK 28.2.13676358
+        run: |
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager "ndk;$NDK_VERSION"
+          ls "/usr/local/lib/android/sdk/ndk/$NDK_VERSION"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-recommends \
+            cmake make perl build-essential
+
+      - name: Build Feelcoin miner from source (v0.1.0)
+        run: |
+          set -euo pipefail
+          HOSTTAG=linux-x86_64
+          NDK="$ANDROID_HOME/ndk/$NDK_VERSION"
+          SR="$PWD/sysroot"
+          NCPU=$(nproc)
+          git clone https://github.com/feelcoin-org/feelcoin-miner.git
+          cd feelcoin-miner
+          git checkout v0.1.0
+          git rev-parse HEAD
+          grep -n 'APP_VERSION' src/version.h || true
+          cd ..
+          git clone --depth 1 https://github.com/libuv/libuv.git
+          git clone --depth 1 --branch openssl-3.4 https://github.com/openssl/openssl.git
+          cmake -S libuv -B libuv-build \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=28 \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DLIBUV_BUILD_TESTS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build libuv-build -j"$NCPU"
+          cmake --install libuv-build --prefix "$SR"
+          ( cd openssl
+            export ANDROID_NDK_ROOT=$NDK
+            export PATH=$NDK/toolchains/llvm/prebuilt/$HOSTTAG/bin:$PATH
+            ./Configure android-arm64 -D__ANDROID_API__=28 \
+              no-shared no-tests no-docs --prefix="$SR"
+            make -j"$NCPU" && make install_sw )
+          mkdir -p stublibs
+          "$NDK/toolchains/llvm/prebuilt/$HOSTTAG/bin/llvm-ar" crs stublibs/libpthread.a
+          "$NDK/toolchains/llvm/prebuilt/$HOSTTAG/bin/llvm-ar" crs stublibs/librt.a
+          cmake -S feelcoin-miner -B feelminer-build \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=28 \
+            -DCMAKE_BUILD_TYPE=Release -DWITH_TLS=ON -DWITH_ASM=ON \
+            -DWITH_HWLOC=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF -DWITH_NVML=OFF \
+            -DWITH_MSR=OFF -DWITH_DMI=OFF \
+            -DCMAKE_C_FLAGS="-O3 -march=armv8.2-a+crypto+aes+sha2+dotprod+fp16 -mcpu=cortex-a78 -mtune=cortex-a78 -flto -funroll-loops -fomit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-O3 -march=armv8.2-a+crypto+aes+sha2+dotprod+fp16 -mcpu=cortex-a78 -mtune=cortex-a78 -flto -funroll-loops -fomit-frame-pointer" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DOPENSSL_ROOT_DIR="$SR" \
+            -DOPENSSL_SSL_LIBRARY="$SR/lib/libssl.a" \
+            -DOPENSSL_CRYPTO_LIBRARY="$SR/lib/libcrypto.a" \
+            -DOPENSSL_INCLUDE_DIR="$SR/include" \
+            -DUV_LIBRARY="$SR/lib/libuv.a" -DUV_INCLUDE_DIR="$SR/include" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$PWD/stublibs"
+          cmake --build feelminer-build -j"$NCPU"
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp feelminer-build/feelcoin-miner app/src/main/jniLibs/arm64-v8a/libfeelminer.so
+
+      - name: Verify TLS is linked
+        run: |
+          strings app/src/main/jniLibs/arm64-v8a/libfeelminer.so | grep -iE 'OpenSSL 3'
+          file app/src/main/jniLibs/arm64-v8a/libfeelminer.so
+          file app/src/main/jniLibs/arm64-v8a/libfeelminer.so | grep -i 'aarch64\|ARM aarch64'
+
+      - name: Hash binary
+        id: hash
+        run: |
+          sha256sum app/src/main/jniLibs/arm64-v8a/libfeelminer.so
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libfeelminer
+          path: app/src/main/jniLibs/arm64-v8a/libfeelminer.so
+
+  build-apk:
+    name: Build and attest APK
+    needs: build-feelminer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Use preinstalled Android SDK
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          ls /usr/local/lib/android/sdk/build-tools
+          ls /usr/local/lib/android/sdk/platforms
+
+      - name: Restore Feelcoin miner binary
+        uses: actions/download-artifact@v4
+        with:
+          name: libfeelminer
+          path: app/src/main/jniLibs/arm64-v8a/
+
+      - name: Verify binary artifact
+        run: |
+          ls -lh app/src/main/jniLibs/arm64-v8a/libfeelminer.so
+          file app/src/main/jniLibs/arm64-v8a/libfeelminer.so
+
+      - name: Build release APK
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: false
+          body: |
+            ARM64 Android app that runs the official Feelcoin Miner v0.1.0 (XMRig 6.26.0 based, GPL-3.0).
+
+            **Install:** download the signed **FeelMiner-*.apk** from this release (uploaded after CI). Do not install an unsigned APK.
+
+            - Package: `io.github.j3r0nim0.feelminer`
+            - Pool: `pool.feelcoin.org:4244` TLS by default, 4242 plaintext alternative
+            - Donate: 0%
+            - Feelcoin only. No Monero, no solo daemon.
+
+            **Use at your own risk.** RandomX will heat the phone. No warranty. Android 8+, arm64-v8a only.
+
+      - name: Upload unsigned APK as workflow artifact (not a release asset)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-unsigned-${{ github.ref_name }}
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
