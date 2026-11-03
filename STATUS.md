@@ -69,9 +69,43 @@
 - adb devices: empty in prior checks; paired phone is not an adb
   device. No install, no on-device benchmark from here.
 
-## CI / signing — to be filled when the watcher returns
-- Branch/tag pushed: main, tag v0.1.0-feel1 (see CI watcher output).
-- CI run: (fill in run id, conclusion, binary hash).
-- Signed APK: (fill in path, size, SHA-256, signer) or exact CI
-  failure if CI failed. Do not install or quote a signed APK before
-  that step.
+## CI / signing — COMPLETE, CI success
+- Repo: ziyadshafeek/feel-miner-android, branch main.
+- Tags tried, in order, with exact failures fixed:
+  - v0.1.0-feel1, run 41644823811, failure: CI step "Install build
+    dependencies" — `E: Command line option --no-recommends is not
+    understood in combination with the other options` (exit 100).
+    Fix: `--no-install-recommends`.
+  - v0.1.0-feel2, run 41645354040, native build success, APK failure:
+    `mergeReleaseNativeLibs FAILED — android.useAndroidX property is
+    not enabled`. Fix: added gradle.properties with
+    `android.useAndroidX=true`.
+  - v0.1.0-feel3, run 41646085298, native build success, APK failure:
+    `compileReleaseKotlin FAILED — MiningService.kt:179:29 Variable
+    'line' must be initialized.` Fix: rewrote the reader loop as
+    `while (shouldRun) { val l = reader.readLine() ?: break … }`.
+  - v0.1.0-feel4, run 41646972139, conclusion SUCCESS, both jobs
+    success, head 642da25bfab59f5e2c9dde0b6ffc3d2a13c22fda.
+- Native binary in the signed APK: lib/arm64-v8a/libfeelminer.so,
+  7,397,784 bytes, SHA-256
+  `389fc2b453de714f8163e0888b9bef27967f013c6005ce63a0907a1a98c064df`,
+  ELF 64-bit ARM aarch64, strings contain "Feelcoin Miner 0.1.0",
+  "pool.feelcoin.org:4244", "OpenSSL 3.4.9-dev", and the upstream
+  error "wallet address is not compatible with Feelcoin mainnet
+  (expected prefix 84, 85 or 86; decoded prefix: %llu)" — this
+  confirms the README prefix validation exists in the binary itself,
+  even though the v0.1.0 WalletAddress tag table read earlier does
+  not list a FEELCOIN entry. The app's own validation follows the
+  README prefixes, and the miner config sets coin=feelcoin explicitly.
+- Signed APK: feel-miner-v0.1.0-feel4-signed.apk, 15,231,858 bytes,
+  SHA-256 `bbe52cff5e58d2f726e55b61f8e740562574162fa37ead9efa581cf896340b7c`,
+  apksigner verify: v2 true, v3 true, v1 false, 1 signer.
+  Signer certificate SHA-256 `4473f14023038f2d912cc0668fb034bfca0039d48fcb40e1b5757edf79451b8a`,
+  CN=Anvil Fork — the existing fork key, same signer as the
+  v0.2.6 photo-preset APK. Package is different
+  (io.github.j3r0nim0.feelminer), so this installs alongside the
+  old APKs, not over them.
+- No on-device benchmark exists: adb devices empty, paired phone is
+  not an adb device. The user must install, paste their own FEEL
+  public address, and run it while charging to get any H/s, accepted
+  share, temperature, or AnonHugePages figure. None is claimed here.
